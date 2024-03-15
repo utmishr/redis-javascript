@@ -1,4 +1,5 @@
 const net = require("net");
+const commands = require("./constatns/commands");
 
 // You can use print statements as follows for debugging, they'll be visible when running tests.
 console.log("Logs from your program will appear here!");
@@ -6,9 +7,10 @@ console.log("Logs from your program will appear here!");
 // Uncomment this block to pass the first stage
 const server = net.createServer((connection) => {
   // Handle connection
+  //Implementing simple Ping
   connection.on("data", (data) => {
     console.log(data);
-    connection.write("+PONG\r\n");
+    connection.write(commands.PONG);
   });
 });
 //
