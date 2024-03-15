@@ -1,20 +1,28 @@
 const net = require("net");
-const RequestParser = require("./RequestParser");
+const { commands, PONG, OK } = require("./constants/commands");
+const { parseInput, encodeOutput } = require("./parser");
+
+const map = new Map();
 
 const server = net.createServer((connection) => {
-  connection.on("data", (data) => {
-    const request = data.toString().trim();
-    const parser = new RequestParser(request);
-    const command = parser.parse();
-
-    if (command.length > 0 && command[0].toUpperCase() === "ECHO") {
-      // If the command is ECHO, echo back the argument
-      const echoedString = command[1];
-      const response = `$${echoedString.length}\r\n${echoedString}\r\n`;
-      connection.write(response);
+  connection.on("data", (redisCommand) => {
+    const redisCommandInString = Buffer.from(redisCommand).toString();
+    console.log(JSON.stringify(redisCommandInString, null, 4));
+    // Return the echo string in case of echo command or else Pong
+    if (redisCommandInString) {
+      const input = parseInput(redisCommandInString); // Convert command string to array of commands
+      if (input[0].toLowerCase() === commands.Echo) {
+        connection.write(encodeOutput(input[1]));
+      } else if (input[0].toLowerCase() === commands.Ping) {
+        connection.write(PONG);
+      } else if (input[0].toLowerCase() === commands.Set) {
+        map.set(input[1], input[2]);
+        connection.write(OK);
+      } else if (input[0].toLowerCase() === commands.Get) {
+        connection.write(encodeOutput(map.get(input[1])));
+      }
     } else {
-      // If the command is not recognized or not implemented, return "PONG"
-      connection.write(`+PONG\r\n`);
+      connection.write(commands.PONG);
     }
   });
 });
