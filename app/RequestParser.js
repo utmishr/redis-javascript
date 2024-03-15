@@ -1,4 +1,5 @@
 const assert = require("assert");
+
 class RequestParser {
   static PartialRequestError = class PartialRequestError extends Error {
     constructor() {
@@ -6,10 +7,12 @@ class RequestParser {
       this.name = "Partial Request";
     }
   };
+
   constructor(buffer) {
     this.request = buffer;
     this.cursor = 0;
   }
+
   parse() {
     let startCursor = this.cursor;
     this.args = [];
@@ -27,6 +30,7 @@ class RequestParser {
       return this.args;
     }
   }
+
   readNum() {
     let num = 0;
     while (this.curr() !== "\r") {
@@ -36,6 +40,7 @@ class RequestParser {
     this.cursor += 2;
     return num;
   }
+
   readBulkString() {
     assert.equal(this.curr(), "$", "Start of bulk string should be $");
     this.cursor++;
@@ -43,6 +48,7 @@ class RequestParser {
     let string = this.getString(lenOfString);
     return string;
   }
+
   getString(lenOfString) {
     if (this.request.length < this.cursor + lenOfString) {
       throw new RequestParser.PartialRequestError();
@@ -51,15 +57,17 @@ class RequestParser {
     this.cursor += lenOfString + 2;
     return ret;
   }
+
   getRemainingRequest() {
     return this.request.slice(this.cursor);
   }
+
   curr() {
     if (this.cursor < 0 || this.cursor >= this.request.length) {
       throw new RequestParser.PartialRequestError();
     }
     return this.request[this.cursor];
-    1;
   }
 }
+
 module.exports = RequestParser;
