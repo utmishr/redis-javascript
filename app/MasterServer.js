@@ -67,6 +67,10 @@ class MasterServer {
       case "replconf":
         socket.write(this.handleReplconf(args.slice(1)));
         break;
+      case "psync":
+        socket.write(this.handlePsync(args.slice(1)));
+        1;
+        break;
     }
   }
   handlePing() {
@@ -108,6 +112,11 @@ class MasterServer {
   }
   handleReplconf(args) {
     return Encoder.createSimpleString("OK");
+  }
+  handlePsync(args) {
+    return Encoder.createSimpleString(
+      `FULLRESYNC ${this.masterReplId} ${this.masterReplOffset}`
+    );
   }
 }
 module.exports = MasterServer;
