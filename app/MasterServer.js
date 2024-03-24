@@ -13,12 +13,12 @@ class MasterServer {
     this.dataStore = new HashTable();
     this.masterReplId = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb";
     this.masterReplOffset = 0;
+    this.replicas = {};
   }
   startServer() {
     const server = net.createServer((socket) => {
       this.clientBuffers[getUid(socket)] = "";
       socket.on(`data`, (data) => {
-        console.log("socket");
         this.clientBuffers[getUid(socket)] += data.toString();
         this.processClientBuffer(socket);
       });
@@ -42,11 +42,12 @@ class MasterServer {
     while (true) {
       let args = requestParser.parse();
       if (args.length === 0) break;
-      this.handleCommand(socket, args);
+      let currentRequest = requestParser.currentRequest;
+      this.handleCommand(socket, args, currentRequest);
     }
     this.clientBuffers[clientKey] = requestParser.getRemainingRequest();
   }
-  handleCommand(socket, args) {
+  handleCommand(socket, args, request) {
     let command = args[0].toLowerCase();
     switch (command) {
       case "ping":
@@ -57,6 +58,7 @@ class MasterServer {
         break;
       case "set":
         socket.write(this.handleSet(args.slice(1)));
+        this.propagate(request);
         break;
       case "get":
         socket.write(this.handleGet(args.slice(1)));
@@ -69,6 +71,7 @@ class MasterServer {
         break;
       case "psync":
         socket.write(this.handlePsync(args.slice(1), socket));
+        this.replicas[getUid(socket)] = { socket, state: "connected" };
         break;
     }
   }
@@ -127,6 +130,13 @@ class MasterServer {
     ]);
     1;
     return finalBuffer;
+  }
+  propagate(request) {
+    for (const replica of Object.values(this.replicas)) {
+      const socket = replica.socket;
+      socket.write(request);
+      1;
+    }
   }
 }
 module.exports = MasterServer;
