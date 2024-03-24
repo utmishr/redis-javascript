@@ -2,7 +2,6 @@ const MasterServer = require("./MasterServer");
 const SlaveServer = require("./SlaveServer");
 const HOST = "localhost";
 const PORT = "6379";
-
 (function init(args) {
   if (args.length === 0) {
     let server = new MasterServer(HOST, PORT);
@@ -31,4 +30,5 @@ const PORT = "6379";
     let server = new MasterServer(HOST, PORT, config);
     server.startServer();
   }
+  // })(process.argv.slice(2))
 })(process.argv.slice(2));
