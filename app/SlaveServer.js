@@ -15,6 +15,7 @@ class SlaveServer {
     this.clientBuffers = {};
   }
   startServer() {
+    this.performHandshake();
     const server = net.createServer((socket) => {
       this.clientBuffers[getUid(socket)] = "";
       socket.on(`data`, (data) => {
@@ -60,6 +61,26 @@ class SlaveServer {
       response = Encoder.createBulkString("role:slave");
     }
     return response;
+  }
+  performHandshake() {
+    const socket = net.createConnection(
+      { host: this.masterHost, port: this.masterPort },
+      () => {
+        console.log(
+          `Connected to master server on ${this.masterHost}:${this.masterPort}`
+        );
+      }
+    );
+    this.masterSocket = socket;
+    socket.write(Encoder.createArray([Encoder.createBulkString("PING")]));
+    this.handshakeStep = 1;
+    socket.on("data", (data) => {});
+    socket.on(`error`, (err) => {
+      console.log(`Error from master server connection : ${err}`);
+    });
+    socket.on("close", () => {
+      console.log("Connection closed");
+    });
   }
 }
 module.exports = SlaveServer;

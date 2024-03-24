@@ -8,5 +8,9 @@ class Encoder {
     }
     return `$-1\r\n`;
   }
+
+  static createArray(arr) {
+    return `*${arr.length}\r\n${arr.join("")}`;
+  }
 }
 module.exports = Encoder;
