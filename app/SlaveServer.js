@@ -74,7 +74,31 @@ class SlaveServer {
     this.masterSocket = socket;
     socket.write(Encoder.createArray([Encoder.createBulkString("PING")]));
     this.handshakeStep = 1;
-    socket.on("data", (data) => {});
+    socket.on("data", (data) => {
+      let masterResponse = data.toString().toLowerCase();
+      if (this.handshakeStep === 1) {
+        if (masterResponse !== Encoder.createSimpleString("pong")) return;
+        this.handshakeStep = 2;
+        socket.write(
+          Encoder.createArray([
+            Encoder.createBulkString("REPLCONF"),
+            Encoder.createBulkString("listening-port"),
+            Encoder.createBulkString(`${this.port}`),
+          ])
+        );
+      } else if (this.handshakeStep === 2) {
+        if (masterResponse !== Encoder.createSimpleString("ok")) return;
+        this.handshakeStep = 3;
+        socket.write(
+          Encoder.createArray([
+            Encoder.createBulkString("REPLCONF"),
+            Encoder.createBulkString("capa"),
+            Encoder.createBulkString("psync2"),
+          ])
+        );
+        1;
+      }
+    });
     socket.on(`error`, (err) => {
       console.log(`Error from master server connection : ${err}`);
     });
