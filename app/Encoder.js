@@ -12,5 +12,12 @@ class Encoder {
   static createArray(arr) {
     return `*${arr.length}\r\n${arr.join("")}`;
   }
+
+  static createInteger(num) {
+    return `:${num}\r\n`;
+  }
+  static createSimpleError(message) {
+    return `-${message}\r\n`;
+  }
 }
 module.exports = Encoder;

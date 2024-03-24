@@ -1,12 +1,15 @@
 const net = require("net");
+const fs = require("fs");
+const path = require("path");
 const Encoder = require("./Encoder");
 const RequestParser = require("./RequestParser");
 const HashTable = require("./HashTable");
+const RDBParser = require("./RDBParser");
 function getUid(socket) {
   return socket.remoteAddress + ":" + socket.remotePort;
 }
 class MasterServer {
-  constructor(host, port) {
+  constructor(host, port, config = null) {
     this.host = host;
     this.port = port;
     this.clientBuffers = {};
@@ -14,8 +17,10 @@ class MasterServer {
     this.masterReplId = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb";
     this.masterReplOffset = 0;
     this.replicas = {};
+    this.config = config;
   }
   startServer() {
+    this.loadRDBFile();
     const server = net.createServer((socket) => {
       this.clientBuffers[getUid(socket)] = "";
       socket.on(`data`, (data) => {
@@ -34,6 +39,15 @@ class MasterServer {
     server.listen(this.port, this.host, () => {
       console.log(`Server Listening on ${this.host}:${this.port}`);
     });
+  }
+  loadRDBFile() {
+    if (!this.config) return;
+    let filePath = path.join(this.config["dir"], this.config["dbfilename"]);
+    if (!fs.existsSync(filePath)) return;
+    const fileBuffer = fs.readFileSync(filePath);
+    let rdbParser = new RDBParser(fileBuffer);
+    rdbParser.parse();
+    this.dataStore = rdbParser.dataStore;
   }
   processClientBuffer(socket) {
     const clientKey = getUid(socket);
@@ -67,11 +81,32 @@ class MasterServer {
         socket.write(this.handleInfo(args.slice(1)));
         break;
       case "replconf":
-        socket.write(this.handleReplconf(args.slice(1)));
+        this.handleReplconf(args.slice(1), socket);
         break;
       case "psync":
         socket.write(this.handlePsync(args.slice(1), socket));
         this.replicas[getUid(socket)] = { socket, state: "connected" };
+        break;
+      case "wait":
+        this.handleWait(args.slice(1), socket, request);
+        break;
+      case "config":
+        socket.write(this.handleConfig(args.slice(1)));
+        break;
+      case "keys":
+        socket.write(this.handleKeys(args.slice(1)));
+        break;
+      case "type":
+        socket.write(this.handleType(args.slice(1)));
+        break;
+      case "xadd":
+        this.handleXadd(args.slice(1), socket);
+        break;
+      case "xrange":
+        socket.write(this.handleXrange(args.slice(1)));
+        break;
+      case "xread":
+        this.handleXread(args.slice(1), socket);
         break;
     }
   }
@@ -112,8 +147,13 @@ class MasterServer {
     }
     return Encoder.createBulkString(response);
   }
-  handleReplconf(args) {
-    return Encoder.createSimpleString("OK");
+  handleReplconf(args, socket) {
+    let arg = args[0].toLowerCase();
+    if (arg === "ack") {
+      this.acknowledgeReplica(parseInt(args[1]));
+    } else {
+      socket.write(Encoder.createSimpleString("OK"));
+    }
   }
   handlePsync(args, socket) {
     socket.write(
@@ -131,11 +171,227 @@ class MasterServer {
     1;
     return finalBuffer;
   }
+  handleConfig(args) {
+    let getCommand = args[0];
+    let arg = args[1].toLowerCase();
+    return Encoder.createArray([
+      Encoder.createBulkString(arg),
+      Encoder.createBulkString(this.config[arg]),
+    ]);
+  }
+  handleType(args) {
+    let key = args[0];
+    let type = this.dataStore.getType(key);
+    if (type === null) {
+      return Encoder.createSimpleString("none");
+    } else {
+      return Encoder.createSimpleString(type);
+    }
+  }
+  handleXadd(args, socket) {
+    let streamKey = args[0];
+    let streamEntry = {};
+    let streamEntryId = args[1];
+    streamEntry["id"] = streamEntryId;
+    for (let i = 2; i < args.length; i += 2) {
+      let entryKey = args[i];
+      let entryValue = args[i + 1];
+      streamEntry[entryKey] = entryValue;
+    }
+    if (streamEntryId === "0-0") {
+      socket.write(
+        Encoder.createSimpleError(
+          "ERR The ID specified in XADD must be greater than 0-0"
+        )
+      );
+      return;
+    }
+    let entryId = this.dataStore.insertStream(streamKey, streamEntry);
+    if (entryId === null) {
+      socket.write(
+        Encoder.createSimpleError(
+          "ERR The ID specified in XADD is equal or smaller than the target stream top item"
+        )
+      );
+      return;
+    }
+    socket.write(Encoder.createBulkString(entryId));
+    this.checkBlock();
+  }
+  handleXrange(args) {
+    let streamKey = args[0];
+    let startId = args[1];
+    let endId = args[2];
+    let entries = this.dataStore.getStreamBetween(streamKey, startId, endId);
+    if (entries.length === 0) {
+      return Encoder.createBulkString("nil");
+    }
+    let ret = [];
+    for (const entry of entries) {
+      let id = entry[0];
+      let keyValues = entry[1];
+      ret.push(
+        Encoder.createArray([
+          Encoder.createBulkString(id),
+          Encoder.createArray(
+            keyValues.map((value) => Encoder.createBulkString(value))
+          ),
+        ])
+      );
+    }
+    return Encoder.createArray(ret);
+  }
+  handleXread(args, socket) {
+    if (args[0].toLowerCase() !== "block") {
+      args = args.slice(1);
+      const mid = Math.ceil(args.length / 2);
+      let streamKeys = args.slice(0, mid);
+      let startIds = args.slice(mid);
+      let entries = this.dataStore.getStreamAfter(streamKeys, startIds);
+      let response = this.getXreadResponse(entries);
+      socket.write(response);
+      return;
+    }
+    let timeoutTime = Number.parseInt(args[1]);
+    args = args.slice(3);
+    const mid = Math.ceil(args.length / 2);
+    let streamKeys = args.slice(0, mid);
+    let startIds = args.slice(mid);
+    startIds = this.processStartIds(streamKeys, startIds);
+    this.block = { streamKeys, startIds, isDone: false };
+    this.block.socket = socket;
+    this.block.timeout = -1;
+    if (timeoutTime != 0) {
+      this.block.timeout = setTimeout(() => {
+        let entries = this.dataStore.getStreamAfter(
+          this.block.streamKeys,
+          this.block.startIds
+        );
+        let response = this.getXreadResponse(entries);
+        this.block.socket.write(response);
+        this.block.isDone = true;
+      }, timeoutTime);
+    }
+    this.checkBlock();
+  }
+  processStartIds(streamKeys, startIds) {
+    for (let i = 0; i < streamKeys.length; i++) {
+      let key = streamKeys[i];
+      let startId = startIds[i];
+      if (startId !== "$") continue;
+      let entries = this.dataStore.get(key);
+      if (entries === null || entries.length === 0) startId = "0-0";
+      let lastEntryId = entries.slice(-1)[0].id;
+      let lastEntryIdMS = lastEntryId.split("-")[0];
+      let lastEntryIdSeq = lastEntryId.split("-")[1];
+      startId = lastEntryIdMS + "-" + `${Number.parseInt(lastEntryIdSeq)}`;
+      startIds[i] = startId;
+    }
+    return startIds;
+  }
+  checkBlock() {
+    if (!this.block || this.block.isDone) return;
+    let entries = this.dataStore.getStreamAfter(
+      this.block.streamKeys,
+      this.block.startIds
+    );
+    if (entries.length === 0) return;
+    let response = this.getXreadResponse(entries);
+    this.block.socket.write(response);
+    this.block.isDone = true;
+    if (this.block.timeout != -1) {
+      clearTimeout(this.block.timeout);
+    }
+  }
+  getXreadResponse(entries) {
+    if (entries.length === 0) {
+      return Encoder.createBulkString("nil", true);
+    }
+    let ret = [];
+    for (const keyEntries of entries) {
+      let key = keyEntries[0];
+      let arr = [Encoder.createBulkString(key)];
+      let entriesForKey = [];
+      for (const entries of keyEntries[1]) {
+        let id = entries[0];
+        let keyValues = entries[1];
+        entriesForKey.push(
+          Encoder.createArray([
+            Encoder.createBulkString(id),
+            Encoder.createArray(
+              keyValues.map((value) => Encoder.createBulkString(value))
+            ),
+          ])
+        );
+      }
+      arr.push(Encoder.createArray(entriesForKey));
+      ret.push(Encoder.createArray(arr));
+    }
+    let response = Encoder.createArray(ret);
+    return response;
+  }
   propagate(request) {
     for (const replica of Object.values(this.replicas)) {
       const socket = replica.socket;
       socket.write(request);
-      1;
+    }
+    this.masterReplOffset += request.length;
+  }
+  handleWait(args, socket, request) {
+    if (Object.keys(this.replicas).length === 0) {
+      socket.write(Encoder.createInteger(0));
+      return;
+    }
+    if (this.masterReplOffset === 0) {
+      socket.write(Encoder.createInteger(Object.keys(this.replicas).length));
+      return;
+    }
+    let numOfReqReplicas = args[0];
+    let timeoutTime = args[1];
+    // Register a wait
+    this.wait = {};
+    this.wait.numOfAckReplicas = 0;
+    this.wait.numOfReqReplicas = numOfReqReplicas;
+    this.wait.socket = socket;
+    this.wait.isDone = false;
+    this.wait.request = request;
+    this.wait.timeout = setTimeout(() => {
+      this.respondToWait();
+    }, timeoutTime);
+
+    for (const replica of Object.values(this.replicas)) {
+      const socket = replica.socket;
+      socket.write(
+        Encoder.createArray([
+          Encoder.createBulkString("REPLCONF"),
+          Encoder.createBulkString("GETACK"),
+          Encoder.createBulkString("*"),
+        ])
+      );
+    }
+  }
+  handleKeys(args) {
+    if (args[0] === "*") {
+      let arr = this.dataStore.getAllKeys().map((value) => {
+        return Encoder.createBulkString(value);
+      });
+      return Encoder.createArray(arr);
+    }
+    return Encoder.createBulkString("", true);
+  }
+
+  respondToWait() {
+    clearTimeout(this.wait.timeout);
+    this.masterReplOffset += this.wait.request.length;
+    this.wait.socket.write(Encoder.createInteger(this.wait.numOfAckReplicas));
+    this.wait.isDone = true;
+  }
+  acknowledgeReplica(replicaOffset) {
+    if (this.wait.isDone) return;
+    if (replicaOffset >= this.masterReplOffset) {
+      this.wait.numOfAckReplicas++;
+      if (this.wait.numOfAckReplicas >= this.wait.numOfReqReplicas)
+        this.respondToWait();
     }
   }
 }
