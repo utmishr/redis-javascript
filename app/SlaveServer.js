@@ -96,7 +96,16 @@ class SlaveServer {
             Encoder.createBulkString("psync2"),
           ])
         );
-        1;
+      } else if (this.handshakeStep === 3) {
+        if (masterResponse !== Encoder.createSimpleString("ok")) return;
+        this.handshakeStep = 4;
+        socket.write(
+          Encoder.createArray([
+            Encoder.createBulkString("PSYNC"),
+            Encoder.createBulkString("?"),
+            Encoder.createBulkString("-1"),
+          ])
+        );
       }
     });
     socket.on(`error`, (err) => {
