@@ -395,4 +395,4 @@ class MasterServer {
     }
   }
 }
-module.exports = MasterServer; //
+module.exports = MasterServer;
